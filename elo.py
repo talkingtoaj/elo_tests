@@ -9,14 +9,22 @@ from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 
 def run_competition(population, user, actual_user_elo, upper_elo, lower_elo, variance_decay):
-    # returns a random number from the range
     competitor = Competitor(random.choice(population), 100, LOSER)
-    if competitor.score > actual_user_elo:
+    
+    # Calculate win probability based on ELO difference
+    elo_diff = competitor.score - actual_user_elo
+    # Linear scale: 0 diff = 50% chance, 500 diff = 100% chance (or 0% if negative)
+    win_probability = 0.5 + (elo_diff / 1000)  # This creates a scale from 0 to 1 centered at 0.5
+    win_probability = max(0, min(1, win_probability))  # Clamp between 0 and 1
+    
+    # Determine winner based on probability
+    if random.random() < win_probability:
         competitor.position = WINNER
         user.position = LOSER
     else:
         competitor.position = LOSER
         user.position = WINNER
+        
     update([user, competitor], variance_decay)
     return competitor, user
 
@@ -57,7 +65,7 @@ def black_box(user_actual_placement, alternating, entries_per_1000, max_variance
         return -1000
     return -rounds 
     
-def simulate_convergence(optimal_params, true_elo, alternating=False, entries_per_1000=4):
+def simulate_convergence(optimal_params, true_elo, alternating=False, entries_per_1000=4, pause=0.1):
     """
     Simulate and visualize the convergence of ELO ratings using the optimal parameters
     """
@@ -76,7 +84,7 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
     plt.ion()  # Interactive mode on
     
     round_num = 0
-    while (user.variance > 500 or abs(user.score - true_elo) > 500) and round_num < 100:
+    while (user.variance > 500 or abs(user.score - true_elo) > 500) and round_num < 40:
         # Store current state
         rounds.append(round_num)
         actual_scores.append(true_elo)
@@ -112,10 +120,11 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
         
         plt.xlabel('Round')
         plt.ylabel('ELO Score')
-        plt.title('ELO Rating Convergence')
+        params_str = f"var:{optimal_params['max_variance']:.0f}, decay:{optimal_params['variance_decay']:.2f}, delta:{optimal_params['competitor_elo_delta']:.0f}"
+        plt.title(f'ELO Rating Convergence\n{params_str}')
         plt.legend()
         plt.grid(True)
-        plt.pause(0.5)        
+        plt.pause(pause)        
         round_num += 1
     
     plt.ioff()
@@ -123,10 +132,11 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
     return round_num
 
 if __name__ == '__main__':
+    wants_example_visualizations = input("Do you want example visualizations? (y/n): ").lower() == "y"
     # init params
     params_gbm ={
-        'max_variance':(500, 4000),
-        'variance_decay':(0.02, 0.5),
+        'max_variance':(1000, 4000),
+        'variance_decay':(0.01, 0.25),
         'competitor_elo_delta':(1000, 9000),
     }
     alternating = False # also try True
@@ -141,7 +151,7 @@ if __name__ == '__main__':
     )
 
     # Add global best score tracking
-    global_best_score = -1000
+    global_best_score = -100
     
     # Run Bayesian Optimization
     start = time.time()
@@ -155,10 +165,11 @@ if __name__ == '__main__':
         optimizer.register(params=next_point, target=avg_score)
         output = f"{avg_score}: " + ", ".join([f"{label}:{value:.1f}" for label,value in next_point.items()])
         print(output)
-        simulate_convergence(next_point, 1250)  # Or any true_elo value
+        if i % 50 == 0 and wants_example_visualizations:
+            simulate_convergence(next_point, 1250)  # Or any true_elo value
         
         # Check if we have a new best score and generate plots
-        if avg_score > global_best_score and avg_score > -100:
+        if avg_score > global_best_score:
             global_best_score = avg_score
             plot_optimization_surfaces(optimizer, global_best_score)
             plot_combined_visualization(optimizer)
