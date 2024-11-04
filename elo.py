@@ -73,6 +73,7 @@ if __name__ == '__main__':
         pbounds=params_gbm,
         verbose=3,
         random_state=None,
+        allow_duplicate_points=True  # Allow testing duplicate parameter combinations
     )
 
     # Add global best score tracking
@@ -81,8 +82,15 @@ if __name__ == '__main__':
     # Run Bayesian Optimization
     start = time.time()
     user_starting_placements = build_population(entries_per_1000=4)
-    for i in range(800):
+    for i in range(500):
         next_point = optimizer.suggest()
+        # Round parameters before evaluation
+        next_point = {
+            'max_variance': round(next_point['max_variance'] / 10) * 10,
+            'competitor_elo_delta': round(next_point['competitor_elo_delta'] / 10) * 10,
+            'variance_decay': round(next_point['variance_decay'], 4),
+            'variance_sensitivity': round(next_point['variance_sensitivity'], 1)
+        }        
         scores = []
         for user_actual_placement in user_starting_placements:
             scores.append(black_box(user_actual_placement, alternating, entries_per_1000, **next_point))
