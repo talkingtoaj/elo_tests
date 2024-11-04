@@ -8,140 +8,65 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 
-def run_competition(population, user, actual_user_elo, upper_elo, lower_elo, variance_decay):
-    competitor = Competitor(random.choice(population), 100, LOSER)
-    
-    # Calculate win probability based on ELO difference
-    elo_diff = competitor.score - actual_user_elo
-    # Linear scale: 0 diff = 50% chance, 500 diff = 100% chance (or 0% if negative)
-    win_probability = 0.5 + (elo_diff / 1000)  # This creates a scale from 0 to 1 centered at 0.5
-    win_probability = max(0, min(1, win_probability))  # Clamp between 0 and 1
-    
-    # Determine winner based on probability
-    if random.random() < win_probability:
-        competitor.position = WINNER
-        user.position = LOSER
-    else:
-        competitor.position = LOSER
-        user.position = WINNER
-        
-    update([user, competitor], variance_decay)
-    return competitor, user
-
-def build_population(entries_per_1000):
-    elos = []
-    for i in range(0, 10000, 1000):
-        for j in range(entries_per_1000):
-            elos.append(random.randint(i, i+1000))
-    elos.sort()
-    return elos
-
-def black_box(user_actual_placement, alternating, entries_per_1000, max_variance, variance_decay, competitor_elo_delta):
-    # we run ELO contests until the user's variance is less than 500 or the user's score is within 500 of the true elo, then we return the number of rounds
+def black_box(user_actual_placement, alternating, entries_per_1000, max_variance, variance_decay, competitor_elo_delta, variance_sensitivity):
     rounds = 0
-    last_higher = False
     true_elo = user_actual_placement
-    guessed_elo = 5000
-    user = Competitor(guessed_elo, max_variance, LOSER)
-    # create a list representing the population of elos; between 0 and 10000, we create 4 elos randomly for each 1000 range
+    user = Competitor(5000, max_variance, LOSER)
     population = build_population(entries_per_1000)
-
+    last_match_won = None
+    
+    # Track when we first enter the correct band
+    first_correct_entry = None
+    
     while (user.variance > 500 or abs(user.score - true_elo) > 500) and rounds < 100:
         rounds += 1
-        if alternating:
-            if last_higher:
-                upper_elo = user.score
-                lower_elo = user.score - competitor_elo_delta
-            else:
-                lower_elo = user.score
-                upper_elo = user.score + competitor_elo_delta
-            last_higher = not last_higher
-        else:
-            lower_elo = user.score - competitor_elo_delta
-            upper_elo = user.score + competitor_elo_delta
-        competitor, user = run_competition(population, user, true_elo, upper_elo, lower_elo, variance_decay)
-    # as we are trying to maximize black_box results, but we want to minimize rounds, we return the negative
-    if rounds >= 100:
-        return -1000
-    return -rounds 
-    
-def simulate_convergence(optimal_params, true_elo, alternating=False, entries_per_1000=4, pause=0.1):
-    """
-    Simulate and visualize the convergence of ELO ratings using the optimal parameters
-    """
-    # Setup initial conditions
-    rounds = []
-    actual_scores = []
-    guessed_scores = []
-    competitor_scores = []
-    variances = []
-    
-    user = Competitor(5000, optimal_params['max_variance'], LOSER)
-    population = build_population(entries_per_1000)
-    
-    # Setup the plot
-    plt.figure(figsize=(12, 6))
-    plt.ion()  # Interactive mode on
-    
-    round_num = 0
-    while (user.variance > 500 or abs(user.score - true_elo) > 500) and round_num < 40:
-        # Store current state
-        rounds.append(round_num)
-        actual_scores.append(true_elo)
-        guessed_scores.append(user.score)
-        variances.append(user.variance)
         
-        # Run competition
-        if alternating:
-            if round_num % 2 == 0:
-                upper_elo = user.score + optimal_params['competitor_elo_delta']
-                lower_elo = user.score
-            else:
-                upper_elo = user.score
-                lower_elo = user.score - optimal_params['competitor_elo_delta']
-        else:
-            lower_elo = user.score - optimal_params['competitor_elo_delta']
-            upper_elo = user.score + optimal_params['competitor_elo_delta']
+        # Check if we're in the correct band
+        in_correct_band = abs(user.score - true_elo) <= 500
+        
+        # Record first entry into correct band
+        if in_correct_band and first_correct_entry is None:
+            first_correct_entry = rounds
+        # Reset if we leave the band
+        elif not in_correct_band:
+            first_correct_entry = None
             
-        competitor, user = run_competition(population, user, true_elo, 
-                                        upper_elo, lower_elo, 
-                                        optimal_params['variance_decay'])
-        competitor_scores.append(competitor.score)
-        
-        # Update plot
-        plt.clf()
-        plt.plot(rounds, actual_scores, 'g-', label='True ELO')
-        plt.plot(rounds, guessed_scores, 'b-', label='Guessed ELO')
-        plt.plot(rounds, competitor_scores, 'r.', label='Competitor ELO')
-        plt.fill_between(rounds, 
-                        [g - v for g, v in zip(guessed_scores, variances)],
-                        [g + v for g, v in zip(guessed_scores, variances)],
-                        alpha=0.2, color='blue')
-        
-        plt.xlabel('Round')
-        plt.ylabel('ELO Score')
-        params_str = f"var:{optimal_params['max_variance']:.0f}, decay:{optimal_params['variance_decay']:.2f}, delta:{optimal_params['competitor_elo_delta']:.0f}"
-        plt.title(f'ELO Rating Convergence\n{params_str}')
-        plt.legend()
-        plt.grid(True)
-        plt.pause(pause)        
-        round_num += 1
+        if alternating:
+            if rounds % 2 == 0:
+                lower_elo, upper_elo = user.score, user.score + competitor_elo_delta
+            else:
+                lower_elo, upper_elo = user.score - competitor_elo_delta, user.score
+        else:
+            lower_elo, upper_elo = get_competitor_elo_bounds(
+                user.score,
+                competitor_elo_delta,
+                last_match_won,
+                user.variance,
+                variance_sensitivity
+            )
+
+        competitor, user = run_competition(population, user, true_elo, upper_elo, lower_elo, variance_decay)
+        last_match_won = competitor.position == LOSER
     
-    plt.ioff()
-    plt.show()
-    return round_num
+    # If we converged (variance <= 500) and stayed in band, return first entry point
+    # Otherwise return the total rounds taken (negative as before)
+    if user.variance <= 500 and first_correct_entry is not None:
+        # we reward early entry
+        return -first_correct_entry
+    return -rounds
 
 if __name__ == '__main__':
     wants_example_visualizations = input("Do you want example visualizations? (y/n): ").lower() == "y"
     # init params
     params_gbm ={
         'max_variance':(1000, 4000),
-        'variance_decay':(0.01, 0.25),
+        'variance_decay':(0.01, 0.13),
         'competitor_elo_delta':(1000, 9000),
+        'variance_sensitivity':(0.1, 5.0),
     }
     alternating = False # also try True
     entries_per_1000 = 4
-    acq = acquisition.UpperConfidenceBound(kappa=2.5)
+    acq = acquisition.UpperConfidenceBound(kappa=1.5)
     optimizer = BayesianOptimization(
         f=None,
         acquisition_function=acq,
@@ -156,7 +81,7 @@ if __name__ == '__main__':
     # Run Bayesian Optimization
     start = time.time()
     user_starting_placements = build_population(entries_per_1000=4)
-    for i in range(500):
+    for i in range(800):
         next_point = optimizer.suggest()
         scores = []
         for user_actual_placement in user_starting_placements:
@@ -171,14 +96,18 @@ if __name__ == '__main__':
         # Check if we have a new best score and generate plots
         if avg_score > global_best_score:
             global_best_score = avg_score
-            plot_optimization_surfaces(optimizer, global_best_score)
-            plot_combined_visualization(optimizer)
+            if wants_example_visualizations:
+                plot_optimization_surfaces(optimizer, global_best_score)
+                plot_combined_visualization(optimizer)
 
     print(f"Time taken: {time.time() - start}")
     print(optimizer.max)
 
     # After finding optimal parameters, run simulation
     best_params = optimizer.max['params']
+    plot_optimization_surfaces(optimizer, global_best_score)
+    plot_combined_visualization(optimizer)
+
     true_elo = 1250
     while True:
         simulate_convergence(best_params, true_elo)  # Or any true_elo value
