@@ -4,6 +4,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import random
 from scipy.interpolate import CubicSpline
+from scipy.interpolate import griddata
 
 WINNER = 1
 LOSER = 0
@@ -17,12 +18,19 @@ def build_population(entries_per_1000):
     elos.sort()
     return elos
 
+def initialialize_user(true_elo, starting_variance):
+    # We simulate knowing the user's grammar score which is going to be roughly related to their reading comprehension score
+    grammar_score = random.gauss(true_elo, 3000)
+    # Clamp the value between 0 and 10000 to stay within reasonable ELO bounds
+    initial_guess = max(0, min(10000, grammar_score))
+    return Competitor(initial_guess, starting_variance, LOSER)
     
-def simulate_convergence(optimal_params, true_elo, alternating=False, entries_per_1000=4, pause=0.1):
+def simulate_convergence(optimal_params, true_elo, entries_per_1000=4, pause=0.1):
     """Simulate and visualize the convergence of ELO ratings using the optimal parameters"""
     # Initialize tracking arrays
     rounds, actual_scores, guessed_scores, competitor_scores, variances = [], [], [], [], []
-    user = Competitor(5000, optimal_params['max_variance'], LOSER)
+
+    user = initialialize_user(true_elo, optimal_params['starting_variance'])
     population = build_population(entries_per_1000)
     
     plt.figure(figsize=(12, 6))
@@ -38,25 +46,17 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
         guessed_scores.append(user.score)
         variances.append(user.variance)
         
-        # Determine competitor ELO bounds using shared logic
-        if alternating:
-            if round_num % 2 == 0:
-                lower_elo, upper_elo = user.score, user.score + optimal_params['competitor_elo_delta']
-            else:
-                lower_elo, upper_elo = user.score - optimal_params['competitor_elo_delta'], user.score
-        else:
-            lower_elo, upper_elo = get_competitor_elo_bounds(
-                user.score, 
-                optimal_params['competitor_elo_delta'],
-                last_match_won,
-                user.variance
-            )
+        # Calculate target ELO based on last match result and variance (consistent with black_box)
+        target_elo = user.score + (user.variance if last_match_won else -user.variance) if last_match_won is not None else user.score
+        competitor_elo = find_closest_competitor(population, target_elo)
             
         # Run competition
-        competitor, user = run_competition(population, user, true_elo, upper_elo, lower_elo, 
-                                        optimal_params['variance_decay'])
-        # Update last match result
-        last_match_won = competitor.position == LOSER
+        competitor, user, last_match_won = run_competition(
+            user, 
+            true_elo, 
+            competitor_elo, 
+            optimal_params['variance_decay']
+        )
         
         competitor_scores.append(competitor.score)
         
@@ -97,9 +97,9 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
         plt.xlabel('Round')
         plt.ylabel('ELO Score')
         plt.title(f'ELO Rating Convergence\n'
-                 f"var:{optimal_params['max_variance']:.0f}, "
+                 f"var:{optimal_params['starting_variance']:.0f}, "
                  f"decay:{optimal_params['variance_decay']:.2f}, "
-                 f"delta:{optimal_params['competitor_elo_delta']:.0f}")
+        )
         plt.legend()
         plt.grid(True)
         plt.pause(pause)
@@ -111,25 +111,37 @@ def simulate_convergence(optimal_params, true_elo, alternating=False, entries_pe
     plt.show()
     return round_num
 
-def run_competition(population, user, actual_user_elo, upper_elo, lower_elo, variance_decay):
-    competitor = Competitor(random.choice(population), 100, LOSER)
+def run_competition(user, actual_user_elo, competitor_elo, variance_decay):
+    """Run a single competition between user and competitor.
+    
+    Args:
+        population: List of available ELO scores
+        user: Competitor object representing the user
+        actual_user_elo: True ELO of the user
+        competitor_elo: ELO of the competitor
+        variance_decay: Variance decay factor
+        
+    Returns:
+        tuple: (competitor object, user object, whether user won)
+    """
+    competitor = Competitor(competitor_elo, 100, LOSER)
     
     # Calculate win probability based on ELO difference
     elo_diff = competitor.score - actual_user_elo
-    # Linear scale: 0 diff = 50% chance, 500 diff = 100% chance (or 0% if negative)
-    win_probability = 0.5 + (elo_diff / 1000)  # This creates a scale from 0 to 1 centered at 0.5
-    win_probability = max(0, min(1, win_probability))  # Clamp between 0 and 1
+    win_probability = 0.5 + (elo_diff / 1000)
+    win_probability = max(0, min(1, win_probability))
     
     # Determine winner based on probability
-    if random.random() < win_probability:
-        competitor.position = WINNER
-        user.position = LOSER
-    else:
+    user_won = random.random() >= win_probability
+    if user_won:
         competitor.position = LOSER
         user.position = WINNER
+    else:
+        competitor.position = WINNER
+        user.position = LOSER
         
     update([user, competitor], variance_decay)
-    return competitor, user
+    return competitor, user, user_won
 
 
 def update(competitor_list, variance_decrease_pc:float=0.1):
@@ -200,6 +212,7 @@ def plot_optimization_surfaces(optimizer, global_best_score):
     Create four separate plots showing polynomial fit for each parameter
     """
     plt.figure(figsize=(20, 5))
+    plt.tight_layout()
     
     param_names = list(optimizer.space.keys)
     param_bounds = optimizer.space.bounds
@@ -254,87 +267,119 @@ def plot_optimization_surfaces(optimizer, global_best_score):
 
 def plot_combined_visualization(optimizer):
     """
-    Creates a single visualization combining all four parameters
+    Creates a visualization combining the parameters
     """
     plt.switch_backend('TkAgg')
     
-    # Approach 1: 3D scatter plot with color (using first 3 parameters)
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    # Extract optimization history
-    points = np.array([[res["params"]["max_variance"], 
-                       res["params"]["variance_decay"],
-                       res["params"]["competitor_elo_delta"],
-                       res["params"]["variance_sensitivity"]] 
+    # Extract data once
+    points = np.array([[res["params"]["starting_variance"], 
+                       res["params"]["variance_decay"]]
                       for res in optimizer.res])
     scores = np.array([res["target"] for res in optimizer.res])
     
-    # Normalize scores for coloring
+    # Create normalization object first
     norm = plt.Normalize(scores.min(), scores.max())
-    colors = plt.cm.viridis(norm(scores))
     
-    # Plot first 3 parameters in 3D
-    scatter = ax.scatter(points[:, 0], points[:, 1], points[:, 2],
+    # 3D scatter plot
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    scatter = ax.scatter(points[:, 0], points[:, 1], scores,
                         c=scores, cmap='viridis',
-                        s=100)  # Size of points
+                        s=100)
     
-    ax.set_xlabel('max_variance')
+    ax.set_xlabel('starting_variance')
     ax.set_ylabel('variance_decay')
-    ax.set_zlabel('competitor_elo_delta')
+    ax.set_zlabel('score')
     
     plt.colorbar(scatter, label='Score')
-    plt.title('Combined Parameter Space Visualization (First 3 Parameters)')
+    plt.title('Parameter Space Visualization')
     plt.tight_layout()
     plt.show()
     
-    # Approach 2: Parallel coordinates plot (all 4 parameters)
-    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    # Parallel coordinates plot with reduced width
+    fig2, ax2 = plt.subplots(figsize=(8, 6))  # Reduced width from 12 to 8
     
-    # Normalize all parameters to [0,1] for visualization
+    # Normalize parameters to [0,1]
     normalized_points = (points - points.min(axis=0)) / (points.max(axis=0) - points.min(axis=0))
     
-    # Plot parallel coordinates
+    # Create parallel coordinates
+    param_count = points.shape[1]
     for i in range(len(points)):
-        ax2.plot(range(4), normalized_points[i], 
+        ax2.plot(range(param_count), normalized_points[i], 
                 c=plt.cm.viridis(norm(scores[i])),
                 alpha=0.5)
     
-    ax2.set_xticks(range(4))
-    ax2.set_xticklabels(['max_variance', 'variance_decay', 
-                        'competitor_elo_delta', 'variance_sensitivity'])
+    ax2.set_xticks(range(param_count))
+    ax2.set_xticklabels(['starting_variance', 'variance_decay'])
     
-    # Add colorbar to the parallel coordinates plot
+    # Add colorbar with smaller size
     sm = plt.cm.ScalarMappable(norm=norm, cmap='viridis')
     sm.set_array([])
-    plt.colorbar(sm, ax=ax2, label='Score')
+    plt.colorbar(sm, ax=ax2, label='Score', fraction=0.046)  # Added fraction parameter to make colorbar thinner
     
     plt.title('Parallel Coordinates Visualization')
     plt.tight_layout()
     plt.show()
 
-def get_competitor_elo_bounds(user_score, competitor_elo_delta, last_match_won=None, user_variance=0, variance_sensitivity=1.0):
+def find_closest_competitor(population, target_elo):
+    """Find the competitor closest to target_elo and remove from population."""
+    if not population:
+        raise ValueError("Population is empty")
+    
+    closest = min(population, key=lambda x: abs(x - target_elo))
+    population.remove(closest)
+    return closest
+
+def plot_3d_surface(optimizer):
     """
-    Args:
-        user_score: Current ELO score of the user
-        competitor_elo_delta: Maximum ELO difference to consider
-        last_match_won: None for first match, otherwise True if user won last match
-        user_variance: Current variance of user's ELO estimate
-        variance_sensitivity: Controls how quickly the sigmoid transitions
+    Create 3D surface plot of optimization results
     """
-    if last_match_won is None:
-        return (
-            user_score - competitor_elo_delta,
-            user_score + competitor_elo_delta
-        )
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
     
-    # Sigmoid function centered at variance=2500 (midpoint)
-    opposite_probability = 1 / (1 + np.exp(-variance_sensitivity * (user_variance - 2500)/1000))
+    # Extract data points
+    points = np.array([[res["params"]["starting_variance"], 
+                       res["params"]["variance_decay"]] 
+                      for res in optimizer.res])
+    scores = np.array([res["target"] for res in optimizer.res])
     
-    if random.random() < opposite_probability:
-        last_match_won = not last_match_won
+    # Create grid for surface (reduced resolution for memory efficiency)
+    grid_points = 50  # Reduced from 100 for better performance
+    xi = np.linspace(points[:, 0].min(), points[:, 0].max(), grid_points)
+    yi = np.linspace(points[:, 1].min(), points[:, 1].max(), grid_points)
+    xi, yi = np.meshgrid(xi, yi)
     
-    if last_match_won:
-        return (user_score, user_score + competitor_elo_delta)
-    else:
-        return (user_score - competitor_elo_delta, user_score)
+    try:
+        # Interpolate with error handling
+        zi = griddata((points[:, 0], points[:, 1]), scores, (xi, yi), 
+                     method='cubic', fill_value=np.nan)
+        
+        # Plot surface (only where interpolation succeeded)
+        mask = ~np.isnan(zi)
+        surf = ax.plot_surface(xi[mask], yi[mask], zi[mask], 
+                             cmap='viridis', alpha=0.6)
+        
+        # Plot actual points
+        scatter = ax.scatter(points[:, 0], points[:, 1], scores, 
+                           c=scores, cmap='viridis', 
+                           s=50, alpha=1)
+        
+        ax.set_xlabel('Starting Variance')
+        ax.set_ylabel('Variance Decay')
+        ax.set_zlabel('Score')
+        
+        plt.colorbar(surf, label='Score')
+        plt.title('Optimization Surface')
+        
+    except Exception as e:
+        print(f"Error creating surface plot: {e}")
+        # Fall back to scatter plot only
+        scatter = ax.scatter(points[:, 0], points[:, 1], scores, 
+                           c=scores, cmap='viridis', 
+                           s=50, alpha=1)
+        plt.colorbar(scatter, label='Score')
+        plt.title('Optimization Points (Surface interpolation failed)')
+    
+    plt.tight_layout()
+    plt.show()

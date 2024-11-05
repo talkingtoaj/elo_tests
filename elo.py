@@ -8,11 +8,11 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 
-def black_box(user_actual_placement, alternating, entries_per_1000, max_variance, variance_decay, competitor_elo_delta, variance_sensitivity):
+def black_box(user_actual_placement, entries_per_1000, starting_variance, variance_decay:int):
     rounds = 0
     true_elo = user_actual_placement
-    user = Competitor(5000, max_variance, LOSER)
-    population = build_population(entries_per_1000)
+    user = initialialize_user(true_elo, starting_variance)
+    available_population = build_population(entries_per_1000)
     last_match_won = None
     
     # Track when we first enter the correct band
@@ -21,32 +21,17 @@ def black_box(user_actual_placement, alternating, entries_per_1000, max_variance
     while (user.variance > 500 or abs(user.score - true_elo) > 500) and rounds < 100:
         rounds += 1
         
-        # Check if we're in the correct band
-        in_correct_band = abs(user.score - true_elo) <= 500
+        # Calculate target based on last match
+        target_elo = user.score + (user.variance if last_match_won else -user.variance)
+        competitor_elo = find_closest_competitor(available_population, target_elo)
         
-        # Record first entry into correct band
-        if in_correct_band and first_correct_entry is None:
-            first_correct_entry = rounds
-        # Reset if we leave the band
-        elif not in_correct_band:
+        # Run competition and update user
+        _, user, last_match_won = run_competition(user, true_elo, competitor_elo, variance_decay)
+        
+        if first_correct_entry and abs(user.score - true_elo) > 500:
             first_correct_entry = None
-            
-        if alternating:
-            if rounds % 2 == 0:
-                lower_elo, upper_elo = user.score, user.score + competitor_elo_delta
-            else:
-                lower_elo, upper_elo = user.score - competitor_elo_delta, user.score
-        else:
-            lower_elo, upper_elo = get_competitor_elo_bounds(
-                user.score,
-                competitor_elo_delta,
-                last_match_won,
-                user.variance,
-                variance_sensitivity
-            )
-
-        competitor, user = run_competition(population, user, true_elo, upper_elo, lower_elo, variance_decay)
-        last_match_won = competitor.position == LOSER
+        elif first_correct_entry is None and abs(user.score - true_elo) <= 500:
+            first_correct_entry = rounds
     
     # If we converged (variance <= 500) and stayed in band, return first entry point
     # Otherwise return the total rounds taken (negative as before)
@@ -59,13 +44,10 @@ if __name__ == '__main__':
     wants_example_visualizations = input("Do you want example visualizations? (y/n): ").lower() == "y"
     # init params
     params_gbm ={
-        'max_variance':(1000, 4000),
-        'variance_decay':(0.01, 0.13),
-        'competitor_elo_delta':(1000, 9000),
-        'variance_sensitivity':(0.1, 5.0),
+        'starting_variance':(100, 4000),
+        'variance_decay':(0.001, 0.13),
     }
-    alternating = False # also try True
-    entries_per_1000 = 4
+    entries_per_1000 = 12
     acq = acquisition.UpperConfidenceBound(kappa=1.5)
     optimizer = BayesianOptimization(
         f=None,
@@ -86,14 +68,12 @@ if __name__ == '__main__':
         next_point = optimizer.suggest()
         # Round parameters before evaluation
         next_point = {
-            'max_variance': round(next_point['max_variance'] / 10) * 10,
-            'competitor_elo_delta': round(next_point['competitor_elo_delta'] / 10) * 10,
+            'starting_variance': round(next_point['starting_variance'] / 10) * 10,
             'variance_decay': round(next_point['variance_decay'], 4),
-            'variance_sensitivity': round(next_point['variance_sensitivity'], 1)
         }        
         scores = []
         for user_actual_placement in user_starting_placements:
-            scores.append(black_box(user_actual_placement, alternating, entries_per_1000, **next_point))
+            scores.append(black_box(user_actual_placement, entries_per_1000, **next_point))
         avg_score = sum(scores) / len(scores)
         optimizer.register(params=next_point, target=avg_score)
         output = f"{avg_score}: " + ", ".join([f"{label}:{value:.1f}" for label,value in next_point.items()])
@@ -110,6 +90,13 @@ if __name__ == '__main__':
 
     print(f"Time taken: {time.time() - start}")
     print(optimizer.max)
+    print('rerunning best params to verify')
+    best_params = optimizer.max['params']
+    scores = []
+    for user_actual_placement in user_starting_placements:
+        scores.append(black_box(user_actual_placement, entries_per_1000, **best_params))
+    avg_score = sum(scores) / len(scores)
+    print(f"Verified score: {avg_score}")
 
     # After finding optimal parameters, run simulation
     best_params = optimizer.max['params']
