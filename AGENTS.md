@@ -12,9 +12,6 @@ uv sync
 # Run main simulation
 uv run python elo.py
 
-# Run hello script
-uv run python hello.py
-
 # Run any Python script
 uv run python <script-name>
 ```
@@ -63,32 +60,6 @@ uv run python <script-name>
   - Return values
 - Keep inline comments minimal; explain "why" not "what"
 
-### Project Structure
-```
-.
-├── elo.py              # Main simulation with Bayesian optimization
-├── utils.py            # Core ELO logic, Competitor class, ProbabilityModel
-├── config.py           # Configuration management (AssessmentConfig)
-├── fit_model.py        # Data fitting utilities (fit_model_to_data)
-├── visualizations.py    # Paper-ready plotting functions
-├── hello.py            # Simple entry point
-├── pyproject.toml      # Dependencies and project config
-├── uv.lock            # Locked dependency versions
-├── README.md          # Project documentation
-└── AGENTS.md          # Agent guidelines (this file)
-```
-
-## Dependencies
-Managed via `pyproject.toml`:
-- `bayesian-optimization>=3.1.0`
-- `matplotlib>=3.10.7`
-- `numpy>=2.3.4`
-- `scipy>=1.14.0`
-- `pandas>=2.2.0`
-
-Add new dependencies: `uv add <package>`
-Add dev dependencies: `uv add --dev <package>`
-
 ## Key Implementation Notes
 
 ### ELO System
@@ -117,36 +88,3 @@ Add dev dependencies: `uv add --dev <package>`
 - Matplotlib with 3D plots and surface interpolations
 - Uses `TkAgg` backend for interactive plots
 - May fail in headless environments; handle gracefully
-
-## Common Patterns
-
-```python
-# Function signature template
-def function_name(param: type, optional: type = default) -> return_type:
-    """Brief description.
-    
-    Args:
-        param: Description
-        optional: Description
-        
-    Returns:
-        Description of return value
-        
-    Raises:
-        ValueError: When input is invalid
-    """
-    pass
-```
-
-## Check Before Committing
-- [ ] No wildcard imports added
-- [ ] Type hints present for new public functions
-- [ ] No hardcoded secrets or paths
-- [ ] Functions have docstrings if complex logic
-- [ ] Code runs: `uv run python elo.py` (test with 'v' and 'g' inputs)
-
-## Notes for AI Agents
-- This is a simulation/math project, not a production service
-- Focus on correctness of ELO calculations and optimization logic
-- Visualization code is experimental; errors should not crash the simulation
-- No existing tests; manual verification via running `elo.py` is current validation method
