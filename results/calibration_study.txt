@@ -1,0 +1,47 @@
+
+=== Truth: matches defaults (scale .5, slip .05) ===
+students  setup              asked exact% clear% range% width  fitted curve
+      30  defaults            19.2   76.0   84.5   95.7  1.71  
+      30  curve only          20.2   76.1   86.5   97.0  1.74  
+      30  curve+difficulty    13.1   67.8   72.8   91.1  1.69  scale 0.37, slip 0.05; flags 4/10 right, 4/43 found
+      30  oracle              18.5   79.6   88.6   97.1  1.73  
+     100  defaults            19.0   76.8   85.4   96.7  1.70  
+     100  curve only          21.6   77.1   88.9   97.6  1.80  
+     100  curve+difficulty    14.7   73.6   80.7   94.0  1.70  scale 0.42, slip 0.05; flags 22/36 right, 22/35 found
+     100  oracle              18.4   78.8   91.4   96.7  1.70  
+     300  defaults            19.1   75.7   83.5   94.8  1.69  
+     300  curve only          22.4   79.7   87.1   97.6  1.83  
+     300  curve+difficulty    15.2   75.6   85.6   95.4  1.70  scale 0.43, slip 0.05; flags 43/52 right, 43/44 found
+     300  oracle              18.3   78.3   91.2   96.7  1.69  
+
+=== Truth: flatter and noisier (scale .9, slip .12) ===
+students  setup              asked exact% clear% range% width  fitted curve
+      30  defaults            20.6   60.8   64.1   82.8  1.77  
+      30  curve only          24.3   62.0   69.0   93.4  2.11  
+      30  curve+difficulty    23.9   59.8   65.1   93.1  2.04  scale 0.82, slip 0.12; flags 2/2 right, 2/43 found
+      30  oracle              24.1   64.4   68.3   94.7  2.08  
+     100  defaults            20.7   60.8   65.6   85.4  1.78  
+     100  curve only          24.1   63.9   68.0   94.4  2.21  
+     100  curve+difficulty    24.0   62.3   71.7   93.3  2.06  scale 0.82, slip 0.12; flags 16/25 right, 16/35 found
+     100  oracle              24.1   64.4   70.8   94.7  2.09  
+     300  defaults            20.7   60.3   67.2   84.8  1.79  
+     300  curve only          23.9   65.1   70.8   94.4  2.11  
+     300  curve+difficulty    24.0   61.2   67.0   92.6  2.01  scale 0.76, slip 0.14; flags 36/52 right, 36/44 found
+     300  oracle              24.0   62.8   67.7   95.3  2.12  
+
+=== Truth: steeper and cleaner (scale .3, slip .02) ===
+students  setup              asked exact% clear% range% width  fitted curve
+      30  defaults            18.2   84.6   94.8   97.9  1.64  
+      30  curve only          12.2   75.2   86.1   95.6  1.66  
+      30  curve+difficulty     8.0   66.4   73.6   92.8  1.66  scale 0.23, slip 0.02; flags 11/21 right, 11/43 found
+      30  oracle               8.7   78.2   86.6   97.2  1.63  
+     100  defaults            18.2   81.4   93.8   98.4  1.66  
+     100  curve only          14.8   79.8   88.9   97.1  1.68  
+     100  curve+difficulty     8.1   72.4   78.9   92.9  1.64  scale 0.25, slip 0.02; flags 28/42 right, 28/35 found
+     100  oracle               8.9   80.0   93.6   97.0  1.64  
+     300  defaults            18.5   81.3   93.8   98.4  1.68  
+     300  curve only          15.9   78.3   88.2   97.9  1.72  
+     300  curve+difficulty     9.0   78.0   87.7   96.2  1.66  scale 0.30, slip 0.02; flags 43/50 right, 43/44 found
+     300  oracle               8.9   79.2   89.1   97.3  1.65  
+
+Done in 169s (6 courses per row, 150 test students each)

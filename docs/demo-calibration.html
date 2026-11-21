@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibrate a course</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><a href="../README.md">bandtest</a></header>
+  <nav class="pages" aria-label="Demos">
+    <a href="demo-test.html">1. Watch a test</a>
+    <a href="demo-calibration.html" aria-current="page">2. Calibrate a course</a>
+    <a href="try-your-data.html">3. Try your data</a>
+    <a href="../COOKBOOK.md">Cookbook</a>
+  </nav>
+
+  <h1>Calibrate a course</h1>
+  <p class="lead">Every course is a little different. Some questions are harder than their band says, and student answers are cleaner in some subjects than others. Here a made-up course takes a 20-question calibration run. The library learns from it, then you can see whether the learning helped.</p>
+
+  <div class="grid side">
+    <section class="card" aria-label="Settings">
+      <h2>Make a fake course</h2>
+      <label for="students">Students in the calibration run</label>
+      <select id="students">
+        <option value="30">30 (one class)</option>
+        <option value="100">100</option>
+        <option value="300">300</option>
+      </select>
+      <label for="bank">Question bank size</label>
+      <select id="bank">
+        <option value="10">100 questions (10 per band)</option>
+        <option value="5">50 questions (5 per band)</option>
+        <option value="3">30 questions (3 per band)</option>
+        <option value="2">20 questions (2 per band)</option>
+      </select>
+      <label for="truth">What real answers look like</label>
+      <select id="truth">
+        <option value="typical">Typical (matches the default)</option>
+        <option value="noisy">Noisy (luck and slips)</option>
+        <option value="sharp">Sharp (clean answers)</option>
+      </select>
+      <p class="small muted" style="margin-top:10px">8% of the questions are secretly 2 bands off from where the course lists them.</p>
+      <div class="row"><button class="primary" id="go">Run the calibration</button></div>
+      <p class="small muted status" id="msg"></p>
+    </section>
+
+    <div id="out" style="display:none">
+      <section class="card">
+        <h2>1. What the library learned about the answers</h2>
+        <p id="sum"></p>
+        <svg class="chart" id="curve"></svg>
+        <div class="legend" id="curve-legend"></div>
+        <p class="small muted">How likely a right answer is, for a student whose level is the given number of bands above (+) or below (-) the question. A steeper line means cleaner answers and shorter tests.</p>
+      </section>
+
+      <section class="card">
+        <h2>2. Questions it flagged as sitting in the wrong band</h2>
+        <p id="flag-sum"></p>
+        <div class="scroll"><table>
+          <thead><tr><th>Question</th><th class="num">Listed band</th><th class="num">Looks like band</th><th class="num">Answers</th><th>Really misplaced?</th></tr></thead>
+          <tbody id="flags"></tbody>
+        </table></div>
+      </section>
+
+      <section class="card">
+        <h2>3. Does it make the test better?</h2>
+        <p class="muted">Runs 80 fresh students through the adaptive test under each setup. Takes a few seconds.</p>
+        <div class="row" style="margin-top:0"><button id="compare">Compare the test</button></div>
+        <p class="small muted status" id="cmp-msg"></p>
+        <div class="scroll" id="cmp-wrap" style="display:none"><table>
+          <thead><tr><th>Setup</th><th class="num">Questions asked</th><th class="num">Exact band</th><th class="num">Range holds true band</th><th class="num">Range width</th></tr></thead>
+          <tbody id="cmp"></tbody>
+        </table></div>
+        <div id="cmp-note"></div>
+      </section>
+    </div>
+
+    <div id="intro" class="card" style="align-self:start">
+      <h2>Things to try</h2>
+      <ol>
+        <li><b>30 students, noisy answers.</b> The default curve is wrong. Run it, then compare the test. Fitting the curve fixes how sure the library claims to be.</li>
+        <li><b>30 students, then compare.</b> Look at the "everything" row. Fitting every question's difficulty from so few answers can make the test worse.</li>
+        <li><b>300 students.</b> Now fitting difficulty pays off, and the flags are mostly right.</li>
+        <li><b>30 students, 50 questions.</b> A smaller bank gives each question more answers, but gives the test fewer questions to choose from.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<script src="bandtest.js"></script>
+<script src="ui.js"></script>
+<script>
+(function () {
+  var Course = BandTest.Course, pRight = BandTest.pRight, BANDS = 10, GUESS = 0.02;
+  var TRUTHS = { typical: { scale: 0.5, slip: 0.05 }, noisy: { scale: 0.9, slip: 0.12 }, sharp: { scale: 0.3, slip: 0.02 } };
+  var $ = function (id) { return document.getElementById(id); };
+  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms || 15); }); };
+  var world = null;
+
+  function real() { var t = TRUTHS[$("truth").value]; return { scale: t.scale, slip: t.slip, guess: GUESS }; }
+
+  function makeWorld(per, rand) {
+    var ids = [], bands = [], d = {};
+    for (var b = 1; b <= BANDS; b++) for (var k = 0; k < per; k++) {
+      var id = "b" + b + "-" + k, x = b - 0.5 + BandTest.gauss(rand) * 0.3;
+      if (rand() < 0.08) x += rand() < 0.5 ? -2 : 2;
+      ids.push(id); bands.push(b); d[id] = Math.min(BANDS, Math.max(0, x));
+    }
+    return { ids: ids, bands: bands, d: d };
+  }
+
+  function fresh(w, seed) {
+    var c = new Course(BANDS, { seed: seed });
+    w.ids.forEach(function (id, i) { c.addQuestion(id, w.bands[i]); });
+    return c;
+  }
+
+  async function calibrate(w, n, rand, seed) {
+    var c = fresh(w, seed), truth = real();
+    for (var i = 0; i < n; i++) {
+      var level = rand() * BANDS, s = c.startStudent("c" + i, { mode: "calibrate", nCalibration: 20 }), q;
+      while ((q = s.nextQuestion()) !== null) s.record(q, rand() < pRight(truth, level, w.d[q]));
+      if (i % 25 === 24) { $("msg").textContent = "Students answered: " + (i + 1) + " of " + n; await wait(); }
+    }
+    return c;
+  }
+
+  function curvePoints(c) {
+    var pts = [];
+    for (var x = -2; x <= 2.001; x += 0.05) pts.push([x, pRight({ scale: c.scale, slip: c.slip, guess: GUESS }, x, 0)]);
+    return pts;
+  }
+
+  function addRow(tbody, cells) {
+    var tr = document.createElement("tr");
+    cells.forEach(function (c) {
+      var td = document.createElement("td");
+      td.textContent = c.t; if (c.c) td.className = c.c;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+
+  $("go").onclick = async function () {
+    $("go").disabled = true; $("intro").style.display = "none";
+    var n = +$("students").value, per = +$("bank").value, rand = BandTest.makeRng((Math.random() * 1e9) | 0);
+    $("msg").textContent = "Building the course…"; await wait();
+    var w = makeWorld(per, rand);
+    var base = await calibrate(w, n, rand, 1);
+    $("msg").textContent = "Learning from the answers…"; await wait();
+    var curveOnly = base.clone(7); curveOnly.fit({ fitCurve: true, fitDifficulty: false });
+    await wait();
+    var both = base.clone(8); both.fit({ fitCurve: true, fitDifficulty: true });
+    world = { w: w, base: base, curveOnly: curveOnly, both: both, truth: real(), n: n };
+
+    var nq = w.ids.length, answers = n * 20;
+    $("sum").textContent = n + " students × 20 questions = " + answers + " answers over " + nq + " questions, about " + Math.round(answers / nq) +
+      " per question. Real curve: scale " + world.truth.scale + ", slip " + world.truth.slip + ". Learned: scale " + curveOnly.curve.scale + ", slip " + curveOnly.curve.slip + ".";
+    var series = [
+      { name: "Real", color: "var(--warn)", points: curvePoints(world.truth) },
+      { name: "Library default", color: "#8a93a3", dash: "6 5", points: curvePoints({ scale: 0.5, slip: 0.05 }) },
+      { name: "Learned from the answers", color: "var(--accent)", points: curvePoints(curveOnly.curve) }
+    ];
+    UI.lineChart($("curve"), series, { xmin: -2, xmax: 2, ymin: 0, ymax: 1, xlabel: "student level minus question difficulty (bands)", label: "Chance of a right answer: real, default and learned curves" });
+    UI.legend($("curve-legend"), series);
+
+    var flags = both.flaggedQuestions(), body = $("flags"); UI.clear(body);
+    var bad = w.ids.filter(function (id, i) { return Math.abs(w.d[id] - (w.bands[i] - 0.5)) >= 1.5; });
+    var right = 0;
+    flags.forEach(function (f) {
+      var isBad = bad.indexOf(f.question) >= 0; if (isBad) right++;
+      addRow(body, [{ t: f.question }, { t: f.listedBand, c: "num" }, { t: f.looksLikeBand, c: "num" }, { t: f.answers, c: "num" },
+        { t: isBad ? "Yes" : "No, a false alarm", c: isBad ? "ok" : "no" }]);
+    });
+    if (!flags.length) addRow(body, [{ t: "Nothing flagged" }, { t: "" }, { t: "" }, { t: "" }, { t: "" }]);
+    $("flag-sum").textContent = (flags.length ? "Flagged " + flags.length + ", and " + right + " of those " + (flags.length === 1 ? "is" : "are") + " really misplaced. " : "Nothing was flagged. ") + "The course really has " + bad.length + " question" + (bad.length === 1 ? "" : "s") + " off by 1.5 bands or more, and " + right + " " + (right === 1 ? "was" : "were") + " found." +
+      (n < BandTest.AUTO_DIFFICULTY_STUDENTS ? " With fewer than " + BandTest.AUTO_DIFFICULTY_STUDENTS + " students the library normally skips this step. It is forced on here so you can see why." : "");
+    $("out").style.display = "block"; $("cmp-wrap").style.display = "none"; $("cmp-msg").textContent = ""; $("cmp-note").textContent = "";
+    $("msg").textContent = "Done."; $("go").disabled = false;
+  };
+
+  async function evaluate(course, label, levels, rand) {
+    var asked = 0, exact = 0, covers = 0, width = 0, wd = world.w.d, truth = world.truth;
+    for (var i = 0; i < levels.length; i++) {
+      var s = course.startStudent("t" + label + i), q;
+      while ((q = s.nextQuestion()) !== null) s.record(q, rand() < pRight(truth, levels[i], wd[q]));
+      var e = s.estimate(), tb = Math.floor(levels[i]) + 1;
+      asked += e.nAnswered; exact += e.band === tb; covers += e.bandRange[0] <= tb && tb <= e.bandRange[1];
+      width += e.bandRange[1] - e.bandRange[0] + 1;
+      if (i % 10 === 9) await wait(0);
+    }
+    var m = levels.length;
+    return { asked: asked / m, exact: exact / m, covers: covers / m, width: width / m };
+  }
+
+  $("compare").onclick = async function () {
+    if (!world) return;
+    $("compare").disabled = true; $("cmp-wrap").style.display = "block";
+    var body = $("cmp"); UI.clear(body);
+    var lrand = BandTest.makeRng(99), levels = [];
+    for (var i = 0; i < 80; i++) levels.push(lrand() * BANDS);
+    var oracle = world.base.clone(9); oracle.setCurve(world.truth);
+    world.w.ids.forEach(function (id) { oracle.setDifficulty(id, world.w.d[id]); });
+    var setups = [
+      ["Built-in defaults, nothing learned", world.base.clone(3)],
+      ["Learned the curve only", world.curveOnly.clone(4)],
+      ["Learned the curve and every question", world.both.clone(5)],
+      ["Best possible (knows the truth)", oracle]
+    ];
+    var results = [];
+    for (var s = 0; s < setups.length; s++) {
+      $("cmp-msg").textContent = "Testing: " + setups[s][0] + "…"; await wait();
+      var r = await evaluate(setups[s][1], s, levels, BandTest.makeRng(500 + s));
+      results.push(r);
+      addRow(body, [{ t: setups[s][0] }, { t: r.asked.toFixed(1), c: "num" }, { t: UI.pct(r.exact), c: "num" }, { t: UI.pct(r.covers), c: "num" }, { t: r.width.toFixed(1) + " bands", c: "num" }]);
+    }
+    $("cmp-msg").textContent = "80 fresh students per row. Small differences are noise. The test promises its range holds the true band 90% of the time, so that column is the honesty check.";
+    var d = results[0], cur = results[1], all = results[2], best = results[3], note = [];
+    if (cur.covers - d.covers > 0.04) note.push("The test now keeps its promise: its range holds the true band " + UI.pct(cur.covers) + " of the time, up from " + UI.pct(d.covers) + ".");
+    if (all.exact < cur.exact - 0.04 && world.n < BandTest.AUTO_DIFFICULTY_STUDENTS) note.push("Learning every question from only " + world.n + " students made exact-band accuracy drop from " + UI.pct(cur.exact) + " to " + UI.pct(all.exact) + ". That is why the library skips it for small courses.");
+    if (all.asked < cur.asked - 3 && all.exact >= cur.exact - 0.04) note.push("Learning every question saved about " + Math.round(cur.asked - all.asked) + " questions per student at about the same accuracy.");
+    var holder = $("cmp-note"); UI.clear(holder);
+    if (note.length) { var p = document.createElement("div"); p.className = "callout"; p.textContent = note.join(" "); holder.appendChild(p); }
+    $("compare").disabled = false;
+  };
+})();
+</script>
+</body>
+</html>
