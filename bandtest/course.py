@@ -34,6 +34,7 @@ import numpy as np
 
 POINTS_PER_BAND = 10  # grid points per band for the belief curve
 _EPS = 1e-6
+AUTO_DIFFICULTY_STUDENTS = 150  # rule of thumb from simulate_calibration.py
 
 
 @dataclass
@@ -61,6 +62,7 @@ class FitReport:
     n_responses: int
     n_students: int
     log_likelihood: float
+    fitted_difficulty: bool = False
 
 
 def _curve_matrix(curve, difficulty, grid):
@@ -145,6 +147,15 @@ class Course:
         return Session(self, student_id, prior_band, mode, n_calibration,
                        confidence, max_questions, range_mass, allow_borderline)
 
+    def record_answer(self, student_id: str, question_id: str, correct: bool) -> None:
+        """Add one past answer to the log (for importing history, no test needed)."""
+        if question_id not in self._index:
+            raise ValueError(f"unknown question {question_id!r}; add_question() it first")
+        q = self._index[question_id]
+        if any(q == qq for qq, _ in self._by_student.get(student_id, [])):
+            raise ValueError(f"{student_id!r} already answered {question_id!r}")
+        self._record(student_id, q, correct)
+
     def _record(self, student_id, qidx, correct):
         self._log.append((student_id, qidx, bool(correct)))
         self._by_student.setdefault(student_id, []).append((qidx, bool(correct)))
@@ -169,18 +180,23 @@ class Course:
         m = a.max(axis=axis, keepdims=True)
         return (m + np.log(np.exp(a - m).sum(axis=axis, keepdims=True))).squeeze(axis)
 
-    def fit(self, fit_curve: bool = True, fit_difficulty: bool = True,
+    def fit(self, fit_curve: bool = True, fit_difficulty: bool | None = None,
             iterations: int = 4, tau: float = 0.5) -> FitReport:
         """Learn from the answers logged so far.
 
-        fit_curve: learn scale and slip. fit_difficulty: learn each question's
-        offset from its band centre. tau sets how strongly a question is
-        pulled back toward its band (smaller is stronger). Population level is
-        taken as even across bands.
+        fit_curve: learn scale and slip (safe at any course size).
+        fit_difficulty: learn each question's offset from its band centre.
+        None (the default) means "only if there are at least 150 students",
+        because the fake-data study found that fewer students make the test
+        worse, not better. tau sets how strongly a question is pulled back
+        toward its band (smaller is stronger). Population level is taken as
+        even across bands.
         """
         if not self._log:
             raise ValueError("no answers recorded yet")
         s_idx, q_idx, y, n_students = self._data()
+        if fit_difficulty is None:
+            fit_difficulty = n_students >= AUTO_DIFFICULTY_STUDENTS
         G = len(self._grid)
         log_prior = np.full(G, -np.log(G))
         offsets = np.array(self._offset)
@@ -227,7 +243,7 @@ class Course:
         self.curve = curve
         self._offset = [float(o) for o in offsets]
         self._touch()
-        return FitReport(curve, len(self._log), n_students, total)
+        return FitReport(curve, len(self._log), n_students, total, bool(fit_difficulty))
 
     def flagged_questions(self, min_answers: int = 8, min_shift: float = 1.0):
         """Questions whose answers look like they belong to another band.
@@ -312,6 +328,8 @@ class Session:
 
     def record(self, question_id: str, correct: bool) -> None:
         c = self.course
+        if question_id not in c._index:
+            raise ValueError(f"unknown question {question_id!r}; add_question() it first")
         q = c._index[question_id]
         if q in self._seen:
             raise ValueError(f"{question_id!r} was already answered by this student")

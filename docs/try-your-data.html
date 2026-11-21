@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try your data</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><a href="../README.md">bandtest</a></header>
+  <nav class="pages" aria-label="Demos">
+    <a href="demo-test.html">1. Watch a test</a>
+    <a href="demo-calibration.html">2. Calibrate a course</a>
+    <a href="try-your-data.html" aria-current="page">3. Try your data</a>
+    <a href="../COOKBOOK.md">Cookbook</a>
+  </nav>
+
+  <h1>Try your data</h1>
+  <p class="lead">Have a spreadsheet of past answers? Drop it in. The library will tell you how clean your answers are, which questions look like they sit in the wrong band, and which band each student is in. It all runs in your browser. Nothing is uploaded anywhere.</p>
+
+  <div class="grid two">
+    <section class="card">
+      <h2>1. Your answers</h2>
+      <p class="small muted">A CSV file with four columns, one row per answer: <code>student, question, band, correct</code>. For <code>correct</code> use 1/0, yes/no or right/wrong. Save as CSV from Excel, Numbers or Google Sheets.</p>
+      <label for="file">Choose a file</label>
+      <input id="file" type="file" accept=".csv,text/csv,text/plain">
+      <label for="text">Or paste it here</label>
+      <textarea id="text" spellcheck="false" placeholder="student,question,band,correct&#10;s1,q1,3,1&#10;s1,q2,5,0"></textarea>
+      <label class="check"><input id="force" type="checkbox"><span>Learn every question's difficulty even if I have fewer than 150 students<br><span class="hint">Not recommended. With few students it can make results worse.</span></span></label>
+      <div class="row">
+        <button class="primary" id="go">Analyse</button>
+        <button id="sample">Use the sample file</button>
+      </div>
+      <div id="err"></div>
+    </section>
+
+    <section class="card" id="tips">
+      <h2>What you get</h2>
+      <ol>
+        <li><b>A plain summary</b> of how clean your answers are, and what that means for test length.</li>
+        <li><b>Flagged questions.</b> Questions whose answers fit a different band than the one you listed. Needs about 150 students.</li>
+        <li><b>A band for each student</b>, with a range and how sure it is.</li>
+        <li><b>Three CSV files</b> to download and use in your own course software.</li>
+      </ol>
+      <p class="small muted">No data? Press "Use the sample file". It has 200 made-up students on a 10-band course, with three questions planted in the wrong band.</p>
+    </section>
+  </div>
+
+  <div id="out" style="display:none">
+    <section class="card">
+      <h2>2. What the answers say</h2>
+      <p id="summary"></p>
+      <ul id="points"></ul>
+      <svg class="chart" id="curve"></svg>
+      <div class="legend" id="curve-legend"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. Questions that look misplaced</h2>
+      <p id="flag-sum"></p>
+      <div class="scroll"><table>
+        <thead><tr><th>Question</th><th class="num">Listed band</th><th class="num">Looks like band</th><th class="num">Answers</th></tr></thead>
+        <tbody id="flags"></tbody>
+      </table></div>
+    </section>
+
+    <section class="card">
+      <h2>4. Each student</h2>
+      <p class="small muted">A student near the edge of two bands gets a range, for example bands 4 to 5.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Student</th><th class="num">Band</th><th class="num">Range</th><th class="num">Sure</th><th class="num">Answers</th></tr></thead>
+        <tbody id="students"></tbody>
+      </table></div>
+      <div class="row">
+        <button id="dl-q">Download question_difficulty.csv</button>
+        <button id="dl-f">Download flagged_questions.csv</button>
+        <button id="dl-s">Download student_bands.csv</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="bandtest.js"></script>
+<script src="sample-data.js"></script>
+<script src="ui.js"></script>
+<script>
+(function () {
+  var Course = BandTest.Course, GUESS = 0.02;
+  var $ = function (id) { return document.getElementById(id); };
+  var YES = ["1", "true", "yes", "y", "right", "correct", "t"], NO = ["0", "false", "no", "n", "wrong", "incorrect", "f"];
+  var results = null;
+
+  function parseCsv(text) {
+    var rows = [], row = [], cell = "", q = false, i, ch;
+    text = text.replace(/^﻿/, "");
+    for (i = 0; i < text.length; i++) {
+      ch = text[i];
+      if (q) {
+        if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+        else if (ch === '"') q = false;
+        else cell += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === ",") { row.push(cell); cell = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); cell = "";
+        if (row.length > 1 || row[0] !== "") rows.push(row);
+        row = [];
+      } else cell += ch;
+    }
+    row.push(cell);
+    if (row.length > 1 || row[0] !== "") rows.push(row);
+    return rows;
+  }
+
+  function fail(msg) {
+    var box = $("err"); UI.clear(box);
+    var d = document.createElement("div"); d.className = "callout"; d.style.borderColor = "var(--bad)";
+    d.textContent = msg; box.appendChild(d);
+    throw new Error(msg);
+  }
+
+  function load(text) {
+    var rows = parseCsv(text);
+    if (rows.length < 2) fail("I could not find any answers. The file needs a header row and at least one answer.");
+    var head = rows[0].map(function (h) { return h.trim().toLowerCase(); });
+    var col = {};
+    ["student", "question", "band", "correct"].forEach(function (name) {
+      col[name] = head.indexOf(name);
+      if (col[name] < 0) fail("Missing column: " + name + ". I found: " + rows[0].join(", "));
+    });
+    var qband = {}, answers = [], seen = {}, maxBand = 0;
+    for (var r = 1; r < rows.length; r++) {
+      var x = rows[r], line = r + 1, word = (x[col.correct] || "").trim().toLowerCase();
+      var ok = YES.indexOf(word) >= 0 ? true : NO.indexOf(word) >= 0 ? false : null;
+      if (ok === null) fail("Row " + line + ": I don't understand correct = '" + word + "'. Use 1/0 or yes/no.");
+      var band = parseInt(x[col.band], 10);
+      if (!(band >= 1)) fail("Row " + line + ": band must be a whole number from 1 up, not '" + x[col.band] + "'.");
+      var st = x[col.student].trim(), qu = x[col.question].trim();
+      if (qu in qband && qband[qu] !== band) fail("Question " + qu + " is listed in band " + qband[qu] + " and band " + band + ". Each question needs one band.");
+      if (seen[st + "\u0001" + qu]) fail("Student " + st + " answered question " + qu + " twice (row " + line + ").");
+      seen[st + "\u0001" + qu] = true;
+      qband[qu] = band; maxBand = Math.max(maxBand, band);
+      answers.push([st, qu, ok]);
+    }
+    if (maxBand < 2) fail("All questions are in band 1. A course needs at least 2 bands.");
+    var course = new Course(maxBand, { seed: 0 });
+    Object.keys(qband).forEach(function (q) { course.addQuestion(q, qband[q]); });
+    answers.forEach(function (a) { course.recordAnswer(a[0], a[1], a[2]); });
+    return course;
+  }
+
+  function curvePts(c) {
+    var pts = [];
+    for (var x = -2; x <= 2.001; x += 0.05) pts.push([x, BandTest.pRight({ scale: c.scale, slip: c.slip, guess: GUESS }, x, 0)]);
+    return pts;
+  }
+
+  function addRow(tbody, cells) {
+    var tr = document.createElement("tr");
+    cells.forEach(function (c) { var td = document.createElement("td"); td.textContent = c[0]; if (c[1]) td.className = c[1]; tr.appendChild(td); });
+    tbody.appendChild(tr);
+  }
+
+  function analyse(text) {
+    UI.clear($("err"));
+    var course = load(text);
+    var students = Object.keys(course.byStudent);
+    var report = course.fit({ fitDifficulty: $("force").checked ? true : undefined });
+    var c = report.curve, flags = course.flaggedQuestions();
+    var counts = {};
+    course.log.forEach(function (l) { counts[l[1]] = (counts[l[1]] || 0) + 1; });
+
+    $("summary").textContent = "Read " + course.log.length + " answers from " + students.length + " students on " + course.ids.length + " questions in " + course.bands + " bands.";
+    var pts = $("points"); UI.clear(pts);
+    function li(t) { var e = document.createElement("li"); e.textContent = t; pts.appendChild(e); }
+    li("Answer curve: scale " + c.scale + ", slip " + c.slip + " (built-in default: scale 0.5, slip 0.05).");
+    if (c.scale > 0.6) li("Your answers are noisier than the default assumes, so a test will need more questions to be sure.");
+    else if (c.scale < 0.4) li("Your answers are sharper than the default assumes, so tests can be shorter.");
+    else li("Your answers are close to what the library assumes.");
+    li(report.fittedDifficulty
+      ? "Learned each question's difficulty (" + students.length + " students is enough)."
+      : "Did not learn each question's difficulty. " + students.length + " students is too few, and it can make results worse. About 150 are needed.");
+    var series = [
+      { name: "Library default", color: "#8a93a3", dash: "6 5", points: curvePts({ scale: 0.5, slip: 0.05 }) },
+      { name: "Learned from your answers", color: "var(--accent)", points: curvePts(c) }
+    ];
+    UI.lineChart($("curve"), series, { xmin: -2, xmax: 2, ymin: 0, ymax: 1, xlabel: "student level minus question difficulty (bands)", label: "Chance of a right answer: default and learned" });
+    UI.legend($("curve-legend"), series);
+
+    var fb = $("flags"); UI.clear(fb);
+    flags.forEach(function (f) { addRow(fb, [[f.question], [f.listedBand, "num"], [f.looksLikeBand, "num"], [f.answers, "num"]]); });
+    if (!flags.length) addRow(fb, [["Nothing flagged"], [""], [""], [""]]);
+    $("flag-sum").textContent = report.fittedDifficulty
+      ? (flags.length ? flags.length + " question" + (flags.length === 1 ? "" : "s") + " look like they belong in a different band. Check them, then move or remove them. The shift shown is cautious: the real gap may be bigger."
+        : "No question stood out. That is a good sign for your question bank.")
+      : "Skipped: not enough students to judge individual questions.";
+
+    var sb = $("students"); UI.clear(sb);
+    var studentRows = students.slice().sort().map(function (s) {
+      var e = course.startStudent(s).estimate();
+      return { s: s, band: e.band, lo: e.bandRange[0], hi: e.bandRange[1], conf: e.confidence, n: e.nAnswered };
+    });
+    studentRows.slice(0, 300).forEach(function (r) {
+      addRow(sb, [[r.s], [r.band, "num"], [r.lo === r.hi ? String(r.lo) : r.lo + " to " + r.hi, "num"], [UI.pct(r.conf), "num"], [r.n, "num"]]);
+    });
+    if (studentRows.length > 300) addRow(sb, [["… and " + (studentRows.length - 300) + " more (all are in the download)"], [""], [""], [""], [""]]);
+
+    var flagged = {}; flags.forEach(function (f) { flagged[f.question] = true; });
+    results = {
+      q: [["question", "listed_band", "difficulty_in_bands", "answers", "flagged"]].concat(course.ids.map(function (id, i) {
+        return [id, course.band[i], course.difficulty(id).toFixed(2), counts[i] || 0, flagged[id] ? "yes" : "no"];
+      })),
+      f: [["question", "listed_band", "looks_like_band", "answers"]].concat(flags.map(function (f) { return [f.question, f.listedBand, f.looksLikeBand, f.answers]; })),
+      s: [["student", "band", "range_low", "range_high", "confidence", "answers"]].concat(studentRows.map(function (r) { return [r.s, r.band, r.lo, r.hi, r.conf.toFixed(2), r.n]; }))
+    };
+    $("out").style.display = "block";
+    $("out").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function save(name, key) { if (results) UI.download(name, results[key].map(UI.csvLine).join("\n") + "\n"); }
+
+  $("go").onclick = function () {
+    var t = $("text").value.trim();
+    try {
+      if (!t) fail("Choose a file or paste your answers first.");
+      analyse(t);
+    } catch (e) { /* the message is already on the page */ }
+  };
+  $("sample").onclick = function () { $("text").value = window.SAMPLE_CSV || ""; try { analyse($("text").value); } catch (e) {} };
+  $("file").onchange = function () {
+    var f = this.files[0]; if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () { $("text").value = rd.result; };
+    rd.readAsText(f);
+  };
+  $("dl-q").onclick = function () { save("question_difficulty.csv", "q"); };
+  $("dl-f").onclick = function () { save("flagged_questions.csv", "f"); };
+  $("dl-s").onclick = function () { save("student_bands.csv", "s"); };
+})();
+</script>
+</body>
+</html>

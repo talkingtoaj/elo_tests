@@ -40,11 +40,11 @@ def p_right(curve, level, difficulty):
     return curve.guess + (1 - curve.guess - curve.slip) / (1 + np.exp(-z))
 
 
-def make_world(rng):
+def make_world(rng, per_band=PER_BAND):
     """True question difficulties: band centre plus noise, 8% misplaced by 2 bands."""
     ids, bands, true_d = [], [], {}
     for b in range(1, BANDS + 1):
-        for k in range(PER_BAND):
+        for k in range(per_band):
             qid = f"b{b}-{k}"
             d = b - 0.5 + rng.normal(0, 0.3)
             if rng.random() < 0.08:
