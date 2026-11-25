@@ -17,11 +17,9 @@ uv run python <script-name>
 ```
 
 ## Testing
-**No test suite currently configured.** To add tests:
-- Create `tests/` directory
-- Use pytest: `uv add --dev pytest`
-- Run single test: `uv run pytest tests/test_specific.py::test_function -v`
-- Run all tests: `uv run pytest`
+Tests live in `tests/` (pytest is not a project dependency, so pass it with `--with`):
+- Run all tests: `uv run --with pytest python -m pytest tests`
+- Run one test: `uv run --with pytest python -m pytest tests/test_bandtest.py::<test_name> -v`
 
 ## Code Style Guidelines
 
