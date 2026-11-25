@@ -10,6 +10,84 @@ WINNER = 1
 LOSER = 0
 DRAW = 0.5
 
+
+class ProbabilityModel:
+    """
+    Manages the probability calculation with configurable parameters.
+    
+    Uses asymmetric logistic function:
+    P(correct) = 1 / (1 + 10^(-steepness * (elo_diff - offset) / 1000))
+    
+    where steepness = steepness_upper for elo_diff >= offset
+          steepness = steepness_lower for elo_diff < offset
+    
+    This allows modeling asymmetric performance where students may 
+    underperform on harder questions compared to easier ones.
+    """
+    
+    def __init__(self, steepness_upper: float = 1.0, steepness_lower: float = 1.0, 
+                 offset: float = 0.0):
+        """
+        Initialize probability model with sigmoid parameters.
+        
+        Args:
+            steepness_upper: Discrimination for questions harder than ability (elo_diff > offset)
+                           Default 1.0 gives ~91% probability at +1000 ELO difference
+            steepness_lower: Discrimination for questions easier than ability (elo_diff < offset)
+                           Default 1.0 gives ~9% probability at -1000 ELO difference
+            offset: Systematic bias in ELO units (default 0 = symmetric around true ability)
+        """
+        self.steepness_upper = steepness_upper
+        self.steepness_lower = steepness_lower
+        self.offset = offset
+        self.bounds = {
+            'steepness_upper': (0.1, 5.0),
+            'steepness_lower': (0.1, 5.0),
+            'offset': (-500, 500)
+        }
+    
+    def get_probability(self, elo_diff: Union[int, float]) -> float:
+        """
+        Calculate probability of answering correctly given ELO difference.
+        
+        Args:
+            elo_diff: Question ELO - Student true ELO (positive = harder question)
+            
+        Returns:
+            Probability between 0.001 and 0.999 (clamped for numerical stability)
+        """
+        adjusted_diff = elo_diff - self.offset
+        
+        # Use different steepness for questions above vs below ability
+        if adjusted_diff >= 0:
+            steepness = self.steepness_upper
+        else:
+            steepness = self.steepness_lower
+        
+        # Base-10 logistic for intuitive interpretation
+        # steepness=1.0 means 10x change in odds per 1000 ELO
+        prob = 1.0 / (1.0 + 10.0 ** (-steepness * adjusted_diff / 1000.0))
+        
+        # Clamp for numerical stability
+        return np.clip(prob, 0.001, 0.999)
+    
+    def to_dict(self) -> dict:
+        """Serialize model parameters to dictionary."""
+        return {
+            'steepness_upper': self.steepness_upper,
+            'steepness_lower': self.steepness_lower,
+            'offset': self.offset
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ProbabilityModel':
+        """Create model from dictionary."""
+        return cls(
+            steepness_upper=data.get('steepness_upper', 1.0),
+            steepness_lower=data.get('steepness_lower', 1.0),
+            offset=data.get('offset', 0.0)
+        )
+
 def build_population(entries_per_1000):
     elos = []
     for i in range(0, 10000, 1000):
@@ -18,20 +96,28 @@ def build_population(entries_per_1000):
     elos.sort()
     return elos
 
-def initialialize_user(true_elo, starting_variance):
+def initialialize_user(true_elo, starting_variance, wants_guessed_starting_elos):
     # We simulate knowing the user's grammar score which is going to be roughly related to their reading comprehension score
     grammar_score = random.gauss(true_elo, 3000)
     # Clamp the value between 0 and 10000 to stay within reasonable ELO bounds
-    initial_guess = max(0, min(10000, grammar_score))
+    if wants_guessed_starting_elos:
+        initial_guess = grammar_score
+    else:
+        initial_guess = 5000
     return Competitor(initial_guess, starting_variance, LOSER)
     
-def simulate_convergence(optimal_params, true_elo, entries_per_1000=4, pause=0.1):
+def simulate_convergence(optimal_params, true_elo, entries_per_1000=12, pause=0.1, 
+                         wants_guessed_starting_elos=False, prob_model = None):
     """Simulate and visualize the convergence of ELO ratings using the optimal parameters"""
+    if prob_model is None:
+        prob_model = ProbabilityModel()
+    
     # Initialize tracking arrays
     rounds, actual_scores, guessed_scores, competitor_scores, variances = [], [], [], [], []
 
-    user = initialialize_user(true_elo, optimal_params['starting_variance'])
-    population = build_population(entries_per_1000)
+    user = initialialize_user(true_elo, optimal_params['starting_variance'], wants_guessed_starting_elos)
+    # Ensure we have enough competitors for the maximum number of rounds (40)
+    population = build_population(max(entries_per_1000, 5))  # At least 50 competitors
     
     plt.figure(figsize=(12, 6))
     plt.ion()
@@ -50,12 +136,13 @@ def simulate_convergence(optimal_params, true_elo, entries_per_1000=4, pause=0.1
         target_elo = user.score + (user.variance if last_match_won else -user.variance) if last_match_won is not None else user.score
         competitor_elo = find_closest_competitor(population, target_elo)
             
-        # Run competition
+        # Run competition with probability model
         competitor, user, last_match_won = run_competition(
             user, 
             true_elo, 
             competitor_elo, 
-            optimal_params['variance_decay']
+            optimal_params['variance_decay'],
+            prob_model
         )
         
         competitor_scores.append(competitor.score)
@@ -111,28 +198,33 @@ def simulate_convergence(optimal_params, true_elo, entries_per_1000=4, pause=0.1
     plt.show()
     return round_num
 
-def run_competition(user, actual_user_elo, competitor_elo, variance_decay):
+def run_competition(user, actual_user_elo, competitor_elo, variance_decay, 
+                    prob_model = None):
     """Run a single competition between user and competitor.
     
     Args:
-        population: List of available ELO scores
         user: Competitor object representing the user
         actual_user_elo: True ELO of the user
         competitor_elo: ELO of the competitor
         variance_decay: Variance decay factor
+        prob_model: ProbabilityModel instance for calculating win probability.
+                   Uses default symmetric model if None.
         
     Returns:
         tuple: (competitor object, user object, whether user won)
     """
+    if prob_model is None:
+        prob_model = ProbabilityModel()  # Default symmetric sigmoid
+    
     competitor = Competitor(competitor_elo, 100, LOSER)
     
-    # Calculate win probability based on ELO difference
+    # Calculate win probability using sigmoid model
+    # elo_diff > 0 means question is harder than student's ability
     elo_diff = competitor.score - actual_user_elo
-    win_probability = 0.5 + (elo_diff / 1000)
-    win_probability = max(0, min(1, win_probability))
+    win_probability = prob_model.get_probability(elo_diff)
     
     # Determine winner based on probability
-    user_won = random.random() >= win_probability
+    user_won = random.random() < win_probability
     if user_won:
         competitor.position = LOSER
         user.position = WINNER

@@ -1,0 +1,9 @@
+## Abstract
+**Title:** _“Rapid Skill Diagnosis: An Adaptive Elo-Inspired Assessment Framework for Personalized Learning”_
+
+As educational institutions increasingly adopt technology-enhanced learning approaches, there is a critical need for computer-aided assessment tools that quickly and accurately diagnose learner competencies while minimizing testing time and cognitive load. Traditional assessments often rely on static methods that are time-intensive and fail to adapt to a learner's skill level in real time. These conventional approaches require lengthy tests to achieve reliability, resulting in higher administration costs and marking overhead, which can limit how frequently assessments can be offered to students.
+
+This study addresses the need for a dynamic, efficient assessment framework capable of quickly converging on a learner's competence. This paper introduces an adaptive assessment framework inspired by the chess Elo rating system that dynamically adjusts question difficulty based on learner performance. Initially developed and tested in language learning contexts, the framework assigns Elo ratings to both questions and students, enabling personalized assessment pathways that adapt to individual skill levels.
+
+Through simulations using Python, we demonstrate that this approach accurately converges on a student's true skill level within an average of fewer than five questions. The framework's lightweight computational requirements make it suitable for integration into existing e-learning platforms and learning management systems, enabling real-time adaptive assessment at scale. The approach is computationally efficient, scalable across domains, and promotes fairness by tailoring assessments to individual learners. This work presents a generalizable model for creating equitable and personalized educational experiences, applicable to any skill that can be staged into levels.
+
